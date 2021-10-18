@@ -8,6 +8,7 @@ const (
 )
 
 type node struct {
+	segament  string
 	path      string
 	wildChild bool
 	children0 [][]*node // 2D-slice promote the accuracy of the seeking for concret target node
