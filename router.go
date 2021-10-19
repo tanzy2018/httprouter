@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	filePath "path"
+	"sort"
 	"strings"
 )
 
@@ -32,14 +33,55 @@ func methodString2MethodType(method string) methodType {
 	return -1
 }
 
+func assertMethod(method string) {
+	for i := 0; i < methodCount; i++ {
+		if methods[i] == method {
+			return
+		}
+	}
+	panic("un resolved method type: " + method)
+}
+
 type pathsBitsMap struct {
 	_map [methodCount]map[string]string
 }
 
 func assertPath(mt methodType, path string) {
+	if len(path) == 0 {
+		panic("path must not be empty string")
+	}
+	if path[0] != '/' {
+		panic("path must start with '/'")
+	}
 	bitsMap := pathsMap._map[mt]
 	if bitsMap != nil && bitsMap[unifyPattern(path)] != "" {
 		panic(fmt.Sprintf("path0 [%s] and path1 [%s] conflict for the same pattern.", path, bitsMap[path]))
+	}
+}
+
+func insertPathPattern(mt methodType, path string) {
+	if pathsMap._map[mt] == nil {
+		pathsMap._map[mt] = make(map[string]string)
+	}
+	pathsMap._map[mt][unifyPattern(path)] = path
+}
+
+func assertSegaments(segaments []string, max int) {
+	if len(segaments) > max {
+		panic(fmt.Sprintf("the segament is overfollow, max segaments is %d ", max))
+	}
+	for i := range segaments {
+		if segaments[i][0] == '*' && i != len(segaments)-1 {
+			panic("/*path mode can only set at the end")
+		}
+	}
+}
+
+func assertSegamentsForFileServe(segaments []string) {
+	for i := range segaments {
+		if segaments[i][0] == '*' && i != len(segaments)-1 {
+			panic("/:path mode can not set in the static file server")
+		}
 	}
 }
 
@@ -71,6 +113,8 @@ func (ps Params) MatchedRoutePath() string {
 
 type Router struct {
 	trees                  [methodCount]*node
+	fileServes             []*node
+	isFileServe            bool
 	PanicHandler           func(http.ResponseWriter, *http.Request, interface{})
 	NotFound               http.HandlerFunc
 	MethodNotAllowed       http.HandlerFunc
@@ -78,9 +122,9 @@ type Router struct {
 	isContainsFileService  bool
 	HandleOPTIONS          bool
 	GlobalOPTIONS          http.Handler
-
 	// Cached value of global (*) allowed methods
 	globalAllowed string
+	MaxSegaments  int
 }
 
 func New() *Router {
@@ -88,6 +132,7 @@ func New() *Router {
 		HandleMethodNotAllowed: true,
 		isContainsFileService:  true,
 		HandleOPTIONS:          true,
+		MaxSegaments:           16,
 	}
 }
 
@@ -120,14 +165,54 @@ func (r *Router) DELETE(path string, handle Handle) {
 }
 
 func (r *Router) Handle(method string, path string, handle Handle) {
-	mT := methodString2MethodType(strings.ToUpper(method))
-	path = filePath.Clean(path)
-	r.handle(mT, path, false, handle)
+	method = strings.ToUpper(method)
+	assertMethod(method)
+	mT := methodString2MethodType(method)
+	r.handle(mT, path, handle)
 }
 
-func (r *Router) handle(method methodType, path string, isFileServe bool, handle Handle) {
+func (r *Router) handle(method methodType, path string, handle Handle) {
+	path = filePath.Clean(path)
 	assertPath(method, path)
-	// TODO: addNode
+	root := r.trees[method]
+	if root == nil {
+		r.trees[method] = &node{
+			segament: "/",
+		}
+		root = r.trees[method]
+		if path == "/" {
+			root.handle = handle
+			return
+		}
+	}
+	segaments := strings.Split(strings.ToLower(path), "/")
+	assertSegaments(segaments, r.MaxSegaments)
+	insertPathPattern(method, path)
+	root.insertChild(path, segaments, handle)
+}
+
+func (r *Router) handleFileServe(method methodType, path string, handle Handle) {
+	path = filePath.Clean(path)
+	if len(path) < 10 || path[len(path)-10:] != "/*filepath" {
+		panic("path must end with /*filepath in path '" + path + "'")
+	}
+	assertPath(method, path)
+	segaments := strings.Split(strings.ToLower(path), "/")
+	assertSegaments(segaments, r.MaxSegaments)
+	assertSegamentsForFileServe(segaments)
+	insertPathPattern(method, path[:len(path)-10])
+	r.isFileServe = true
+	fnode := &node{
+		path:    path[:len(path)-10],
+		handle:  handle,
+		keyPair: []keyPair{{i: len(segaments) - 1, key: "filepath"}},
+	}
+	r.fileServes = append(r.fileServes, fnode)
+	if len(r.fileServes) > 1 {
+		sort.Slice(r.fileServes, func(i, j int) bool {
+			return r.fileServes[i].path > r.fileServes[j].path
+		})
+	}
 }
 
 func (r *Router) Handler(method, path string, handler http.Handler) {
@@ -143,13 +228,8 @@ func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
 }
 
 func (r *Router) ServeFiles(path string, root http.FileSystem) {
-	path = filePath.Clean(path)
-	if len(path) < 10 || path[len(path)-10:] != "/*filepath" {
-		panic("path must end with /*filepath in path '" + path + "'")
-	}
-
 	fileServer := http.FileServer(root)
-	r.handle(methodString2MethodType("GET"), path, true, func(w http.ResponseWriter, req *http.Request, ps Params) {
+	r.handleFileServe(methodString2MethodType("GET"), path, func(w http.ResponseWriter, req *http.Request, ps Params) {
 		req.URL.Path = ps.ByName("filepath")
 		fileServer.ServeHTTP(w, req)
 	})
@@ -161,7 +241,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	path := req.URL.Path
-
+	if r.isFileServe && req.Method == http.MethodGet {
+		// handle the static file server
+		for _, root := range r.fileServes {
+			if root.path == path[:len(root.path)] {
+				root.handle(w, req, resolveParamsFromPath(path, root.keyPair))
+				return
+			}
+		}
+	}
 	if root := r.trees[methodString2MethodType(req.Method)]; root != nil {
 		if handle, ps := root.resolvePath(path); handle != nil {
 			if ps != nil {

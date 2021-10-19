@@ -25,7 +25,7 @@ func initPlaceHolder() {
 func resolveKeyPairFromPattern(path, pattern string) (kp []keyPair) {
 	patternSlice := strings.Split(pattern, "/")
 	for i := 0; i < len(patternSlice); i++ {
-		if patternSlice[i][0] == ':' {
+		if patternSlice[i][0] == ':' || patternSlice[i][0] == '*' {
 			kp = append(kp, keyPair{i, patternSlice[i][1:]})
 		}
 	}
@@ -36,7 +36,12 @@ func resolveParamsFromPath(path string, kp []keyPair) Params {
 	pathSlice := strings.Split(path, "/")
 	ps := make(Params, 0, len(kp))
 	for i := 0; i < len(kp); i++ {
-		ps = append(ps, Param{Key: kp[i].key, Value: pathSlice[kp[i].i]})
+		if kp[i].i <= len(pathSlice) {
+			ps = append(ps, Param{Key: kp[i].key, Value: pathSlice[kp[i].i]})
+		} else {
+			ps = append(ps, Param{Key: kp[i].key, Value: ""})
+			break
+		}
 	}
 	return ps
 }
