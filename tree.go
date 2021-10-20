@@ -5,13 +5,13 @@ import (
 )
 
 type node struct {
-	segament  string
-	path      string
-	wildChild bool
-	children0 [][]*node // 2D-slice promote the accuracy of the seeking for concret target node
-	children1 []*node   // 1D-slice promote the accuracy of the seeking for fuzzy target node
-	handle    Handle
-	keyPair   []keyPair // save the params mode.
+	segament    string
+	path        string
+	isWildChild bool
+	children0   [][]*node // 2D-slice promote the accuracy of the seeking for concret target node
+	children1   []*node   // 1D-slice promote the accuracy of the seeking for fuzzy target node
+	handle      Handle
+	keyPair     []keyPair // save the params mode.
 }
 
 type keyPair struct {
@@ -53,8 +53,41 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 	segment := segments[0]
 	index := len(segments)
 	var child *node
-	isNewNode := false
-	_ = isNewNode
+	type nodeType int
+	const (
+		old nodeType = iota
+		newParam
+		newConcret
+	)
+	nType := old
+	if len(segment) == 1 && segment[0] == '*' {
+		// handle the wildchild
+		root.isWildChild = true
+		if root.handle == nil {
+			root.handle = handle
+			root.path = path
+		}
+		root.keyPair = append(root.keyPair, resolveKeyPairFromPattern(path)...)
+		sort.Slice(root.keyPair, func(i, j int) bool {
+			return root.keyPair[i].i < root.keyPair[j].i
+		})
+
+		if root.children1 == nil {
+			root.children1 = make([]*node, index+1)
+		}
+		if len(root.children1) < index+1 {
+			root.children1 = append(root.children1, make([]*node, index+1-len(root.children1))...)
+		}
+		child = &node{
+			isWildChild: true,
+			path:        path,
+			keyPair:     resolveKeyPairFromPattern(path),
+			handle:      handle,
+		}
+		root.children1[index] = child
+		return
+	}
+
 	if segment[0] == ':' {
 		if root.children1 == nil {
 			root.children1 = make([]*node, index+1)
@@ -64,11 +97,9 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 		}
 		if root.children1[index] == nil {
 			root.children1[index] = &node{}
-			isNewNode = true
+			nType = newParam
 		}
 		child = root.children1[index]
-
-	} else if segment[0] == '*' {
 
 	} else {
 		if root.children0 == nil {
@@ -87,10 +118,20 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 				sort.Slice(root.children0[index], func(i, j int) bool {
 					return root.children0[index][i].segament < root.children0[index][j].segament
 				})
-				isNewNode = true
+				nType = newConcret
 			}
 		}
 	}
+
+	if len(segments) == 1 && nType != old {
+		child.handle = handle
+		child.path = path
+		child.keyPair = resolveKeyPairFromPattern(path)
+	}
+	if nType == newConcret {
+		child.segament = segment
+	}
+
 	segments = segments[1:]
 	if len(segments) > 0 {
 		child.insertChild(path, segments, handle)

@@ -59,6 +59,14 @@ func assertPath(mt methodType, path string) {
 	}
 }
 
+func assertPathPrefixWithFileServe(path string, nodes []*node) {
+	for _, n := range nodes {
+		if len(n.segament) <= len(path) && n.segament == path[:len(n.segament)] {
+			panic(fmt.Sprintf("the prefix of path0 [%s] is conflict with path1 [%s] for the same pattern.", path, n.path))
+		}
+	}
+}
+
 func insertPathPattern(mt methodType, path string) {
 	if pathsMap._map[mt] == nil {
 		pathsMap._map[mt] = make(map[string]string)
@@ -137,6 +145,9 @@ func New() *Router {
 }
 
 func (r *Router) GET(path string, handle Handle) {
+	if r.isFileServe {
+
+	}
 	r.Handle(http.MethodGet, path, handle)
 }
 
@@ -174,6 +185,10 @@ func (r *Router) Handle(method string, path string, handle Handle) {
 func (r *Router) handle(method methodType, path string, handle Handle) {
 	path = filePath.Clean(path)
 	assertPath(method, path)
+	if r.isFileServe && method == methodString2MethodType(http.MethodGet) {
+		assertPathPrefixWithFileServe(path, r.fileServes)
+	}
+
 	root := r.trees[method]
 	if root == nil {
 		r.trees[method] = &node{
@@ -181,6 +196,7 @@ func (r *Router) handle(method methodType, path string, handle Handle) {
 		}
 		root = r.trees[method]
 		if path == "/" {
+			root.path = "/"
 			root.handle = handle
 			return
 		}
@@ -203,9 +219,11 @@ func (r *Router) handleFileServe(method methodType, path string, handle Handle) 
 	insertPathPattern(method, path[:len(path)-10])
 	r.isFileServe = true
 	fnode := &node{
-		path:    path[:len(path)-10],
-		handle:  handle,
-		keyPair: []keyPair{{i: len(segaments) - 1, key: "filepath"}},
+		segament:    path[:len(path)-10],
+		path:        path,
+		handle:      handle,
+		isWildChild: true,
+		keyPair:     []keyPair{{i: len(segaments) - 1, key: "filepath"}},
 	}
 	r.fileServes = append(r.fileServes, fnode)
 	if len(r.fileServes) > 1 {
@@ -229,7 +247,7 @@ func (r *Router) HandlerFunc(method, path string, handler http.HandlerFunc) {
 
 func (r *Router) ServeFiles(path string, root http.FileSystem) {
 	fileServer := http.FileServer(root)
-	r.handleFileServe(methodString2MethodType("GET"), path, func(w http.ResponseWriter, req *http.Request, ps Params) {
+	r.handleFileServe(methodString2MethodType(http.MethodGet), path, func(w http.ResponseWriter, req *http.Request, ps Params) {
 		req.URL.Path = ps.ByName("filepath")
 		fileServer.ServeHTTP(w, req)
 	})
@@ -245,7 +263,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// handle the static file server
 		for _, root := range r.fileServes {
 			if root.path == path[:len(root.path)] {
-				root.handle(w, req, resolveParamsFromPath(path, root.keyPair))
+				root.handle(w, req, resolveParamsFromPath(path, root.keyPair, root.isWildChild))
 				return
 			}
 		}
