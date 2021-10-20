@@ -69,3 +69,12 @@ func unifyPattern(path string) string {
 	}
 	return strings.Join(pathSlice, "/")
 }
+
+func makeSegments(path string, max int) (segaments []string) {
+	segaments = strings.Split(strings.ToLower(path), "/")
+	if len(segaments) <= max {
+		return segaments
+	}
+	segaments[max-1] = strings.Join(segaments[max-1:], "/")
+	return segaments[:max]
+}

@@ -43,7 +43,33 @@ func assertMethod(method string) {
 }
 
 type pathsBitsMap struct {
-	_map [methodCount]map[string]string
+	patterns [methodCount]map[string]string
+	wilds    [methodCount]bool
+}
+
+func (pb *pathsBitsMap) insertPathPattern(mt methodType, path string) {
+	if pb.patterns[mt] == nil {
+		pb.patterns[mt] = make(map[string]string)
+	}
+	pb.patterns[mt][unifyPattern(path)] = path
+}
+
+func (pb *pathsBitsMap) searchPattern(mt methodType, path string) (existedPath string) {
+	bitsMap := pb.patterns[mt]
+	if bitsMap != nil {
+		return bitsMap[unifyPattern(path)]
+	}
+	return ""
+}
+
+func (pb *pathsBitsMap) setWildsBit(mt methodType, isWild bool) {
+	if !pb.wilds[mt] {
+		pb.wilds[mt] = isWild
+	}
+}
+
+func (pb *pathsBitsMap) getWildsBitByMethodType(mt methodType) bool {
+	return pb.wilds[mt]
 }
 
 func assertPath(mt methodType, path string) {
@@ -53,9 +79,8 @@ func assertPath(mt methodType, path string) {
 	if path[0] != '/' {
 		panic("path must start with '/'")
 	}
-	bitsMap := pathsMap._map[mt]
-	if bitsMap != nil && bitsMap[unifyPattern(path)] != "" {
-		panic(fmt.Sprintf("path0 [%s] and path1 [%s] conflict for the same pattern.", path, bitsMap[path]))
+	if existedPath := pathsMap.searchPattern(mt, path); existedPath != "" {
+		panic(fmt.Sprintf("inserting path [%s] conficts with the exsited path [%s] for the same pattern.", path, existedPath))
 	}
 }
 
@@ -65,13 +90,6 @@ func assertPathPrefixWithFileServe(path string, nodes []*node) {
 			panic(fmt.Sprintf("the prefix of path0 [%s] is conflict with path1 [%s] for the same pattern.", path, n.path))
 		}
 	}
-}
-
-func insertPathPattern(mt methodType, path string) {
-	if pathsMap._map[mt] == nil {
-		pathsMap._map[mt] = make(map[string]string)
-	}
-	pathsMap._map[mt][unifyPattern(path)] = path
 }
 
 func assertSegaments(segaments []string, max int) {
@@ -93,7 +111,7 @@ func assertSegamentsForFileServe(segaments []string) {
 	}
 }
 
-var pathsMap *pathsBitsMap
+var pathsMap = new(pathsBitsMap)
 
 type Handle func(http.ResponseWriter, *http.Request, Params)
 
@@ -131,8 +149,8 @@ type Router struct {
 	HandleOPTIONS          bool
 	GlobalOPTIONS          http.Handler
 	// Cached value of global (*) allowed methods
-	globalAllowed string
-	MaxSegaments  int
+	globalAllowed     string
+	MaxSegamentsLimit int
 }
 
 func New() *Router {
@@ -140,7 +158,7 @@ func New() *Router {
 		HandleMethodNotAllowed: true,
 		isContainsFileService:  true,
 		HandleOPTIONS:          true,
-		MaxSegaments:           16,
+		MaxSegamentsLimit:      16,
 	}
 }
 
@@ -202,8 +220,14 @@ func (r *Router) handle(method methodType, path string, handle Handle) {
 		}
 	}
 	segaments := strings.Split(strings.ToLower(path), "/")
-	assertSegaments(segaments, r.MaxSegaments)
-	insertPathPattern(method, path)
+	assertSegaments(segaments, r.MaxSegamentsLimit)
+	if segaments[len(segaments)-1][0] == '*' {
+		subPath := path[:len(path)-len(segaments[len(segaments)-1])-1]
+		pathsMap.insertPathPattern(method, strings.ToLower(subPath))
+		pathsMap.setWildsBit(method, true)
+		root.insertChild(subPath, segaments[:len(segaments)-1], handle)
+	}
+	pathsMap.insertPathPattern(method, strings.ToLower(path))
 	root.insertChild(path, segaments, handle)
 }
 
@@ -214,9 +238,9 @@ func (r *Router) handleFileServe(method methodType, path string, handle Handle) 
 	}
 	assertPath(method, path)
 	segaments := strings.Split(strings.ToLower(path), "/")
-	assertSegaments(segaments, r.MaxSegaments)
+	assertSegaments(segaments, r.MaxSegamentsLimit)
 	assertSegamentsForFileServe(segaments)
-	insertPathPattern(method, path[:len(path)-10])
+	pathsMap.insertPathPattern(method, strings.ToLower(path[:len(path)-10]))
 	r.isFileServe = true
 	fnode := &node{
 		segament:    path[:len(path)-10],
@@ -258,18 +282,20 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		defer r.recv(w, req)
 	}
 
-	path := req.URL.Path
+	path := filePath.Clean(req.URL.Path)
 	if r.isFileServe && req.Method == http.MethodGet {
 		// handle the static file server
+		_path := strings.ToLower(path)
 		for _, root := range r.fileServes {
-			if root.path == path[:len(root.path)] {
+			if root.path == _path[:len(root.path)] {
 				root.handle(w, req, resolveParamsFromPath(path, root.keyPair, root.isWildChild))
 				return
 			}
 		}
 	}
-	if root := r.trees[methodString2MethodType(req.Method)]; root != nil {
-		if handle, ps := root.resolvePath(path); handle != nil {
+	mt := methodString2MethodType(req.Method)
+	if root := r.trees[mt]; root != nil {
+		if handle, ps := root.resolvePath(path, pathsMap.getWildsBitByMethodType(mt)); handle != nil {
 			if ps != nil {
 				handle(w, req, ps)
 			} else {

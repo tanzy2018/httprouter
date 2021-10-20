@@ -2,6 +2,7 @@ package httprouter
 
 import (
 	"sort"
+	"strings"
 )
 
 type node struct {
@@ -48,6 +49,13 @@ func findChild(children []*node, segament string) *node {
 	return nil
 }
 
+func max(a, b int) int {
+	if a < b {
+		return b
+	}
+	return a
+}
+
 func (root *node) insertChild(path string, segments []string, handle Handle) {
 	// TODO: complete the store logic.
 	segment := segments[0]
@@ -56,39 +64,12 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 	type nodeType int
 	const (
 		old nodeType = iota
-		newParam
 		newConcret
+		newParam
+		newWildchild
 	)
 	nType := old
-	if len(segment) == 1 && segment[0] == '*' {
-		// handle the wildchild
-		root.isWildChild = true
-		if root.handle == nil {
-			root.handle = handle
-			root.path = path
-		}
-		root.keyPair = append(root.keyPair, resolveKeyPairFromPattern(path)...)
-		sort.Slice(root.keyPair, func(i, j int) bool {
-			return root.keyPair[i].i < root.keyPair[j].i
-		})
-
-		if root.children1 == nil {
-			root.children1 = make([]*node, index+1)
-		}
-		if len(root.children1) < index+1 {
-			root.children1 = append(root.children1, make([]*node, index+1-len(root.children1))...)
-		}
-		child = &node{
-			isWildChild: true,
-			path:        path,
-			keyPair:     resolveKeyPairFromPattern(path),
-			handle:      handle,
-		}
-		root.children1[index] = child
-		return
-	}
-
-	if segment[0] == ':' {
+	if segment[0] == ':' || segment[0] == '*' {
 		if root.children1 == nil {
 			root.children1 = make([]*node, index+1)
 		}
@@ -98,6 +79,9 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 		if root.children1[index] == nil {
 			root.children1[index] = &node{}
 			nType = newParam
+		}
+		if segment[0] == '*' {
+			nType = newWildchild
 		}
 		child = root.children1[index]
 
@@ -132,12 +116,72 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 		child.segament = segment
 	}
 
-	segments = segments[1:]
-	if len(segments) > 0 {
-		child.insertChild(path, segments, handle)
+	if nType == newWildchild {
+		child.isWildChild = true
+	}
+
+	if len(segments) > 1 {
+		child.insertChild(path, segments[1:], handle)
 	}
 }
 
-func (root *node) resolvePath(path string) (handle Handle, ps Params) {
+func (root *node) resolvePath(path string, isWild bool) (handle Handle, ps Params) {
+	if isWild {
+		segaments := makeSegments(path, max(len(root.children0), len(root.children1)))
+		return root.getValue1(path, segaments)
+	} else {
+		segaments := strings.Split(strings.ToLower(path), "/")
+		return root.getValue(path, segaments)
+	}
+}
+
+func (root *node) getValue(path string, segaments []string) (handle Handle, ps Params) {
+	if len(segaments) == 0 {
+		if root.handle == nil {
+			return
+		}
+		handle = root.handle
+		if len(root.keyPair) > 0 {
+			ps = resolveParamsFromPath(path, root.keyPair, root.isWildChild)
+		}
+		return
+	}
+	// try finding handle in the children0
+	if len(segaments) <= len(root.children0) {
+		child := findChild(root.children0[len(segaments)], segaments[0])
+		if child != nil {
+			handle, ps = child.getValue(path, segaments[1:])
+		}
+	}
+
+	// try finding handle in the children1
+	if handle == nil && len(segaments) <= len(root.children1) {
+		if child := root.children1[len(segaments)]; child != nil {
+			handle, ps = child.getValue(path, segaments[1:])
+		}
+	}
+	return
+}
+
+func (root *node) getValue1(path string, segaments []string) (handle Handle, ps Params) {
+	if len(segaments) == 0 {
+		if root.handle == nil {
+			return
+		}
+		handle = root.handle
+		if len(root.keyPair) > 0 {
+			ps = resolveParamsFromPath(path, root.keyPair, root.isWildChild)
+		}
+		return
+	}
+	// try getValue
+	for len(segaments) >= 0 {
+		handle, ps = root.getValue(path, segaments)
+		if handle != nil {
+			break
+		}
+		segaments = segaments[:len(segaments)-1]
+	}
+
 	return
 }
