@@ -2,7 +2,6 @@ package httprouter
 
 import (
 	"sort"
-	"strings"
 )
 
 type node struct {
@@ -111,6 +110,7 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 		child.handle = handle
 		child.path = path
 		child.keyPair = resolveKeyPairFromPattern(path)
+		paramsPools.update(len(child.keyPair))
 	}
 	if nType == newConcret {
 		child.segament = segment
@@ -126,11 +126,10 @@ func (root *node) insertChild(path string, segments []string, handle Handle) {
 }
 
 func (root *node) resolvePath(path string, isWild bool) (handle Handle, ps Params) {
+	segaments := makeSegments(path, max(len(root.children0), len(root.children1)))
 	if isWild {
-		segaments := makeSegments(path, max(len(root.children0), len(root.children1)))
 		return root.getValue1(path, segaments)
 	} else {
-		segaments := strings.Split(strings.ToLower(path), "/")
 		return root.getValue(path, segaments)
 	}
 }
@@ -164,16 +163,6 @@ func (root *node) getValue(path string, segaments []string) (handle Handle, ps P
 }
 
 func (root *node) getValue1(path string, segaments []string) (handle Handle, ps Params) {
-	if len(segaments) == 0 {
-		if root.handle == nil {
-			return
-		}
-		handle = root.handle
-		if len(root.keyPair) > 0 {
-			ps = resolveParamsFromPath(path, root.keyPair, root.isWildChild)
-		}
-		return
-	}
 	// try getValue
 	for len(segaments) >= 0 {
 		handle, ps = root.getValue(path, segaments)

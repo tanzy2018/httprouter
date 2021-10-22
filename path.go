@@ -34,24 +34,28 @@ func resolveKeyPairFromPattern(pattern string) (kp []keyPair) {
 
 func resolveParamsFromPath(path string, kp []keyPair, iswildChild bool) Params {
 	pathSlice := strings.Split(path, "/")
-	ps := make(Params, 0, len(kp))
 	if len(kp) == 0 {
 		return nil
 	}
-
+	ps := paramsPools.get(len(kp) - 1)
+	if ps == nil {
+		ps = make(Params, len(kp))
+	}
 	for i := 0; i < len(kp)-1; i++ {
-		if kp[i].i <= len(pathSlice) {
-			ps = append(ps, Param{Key: kp[i].key, Value: pathSlice[kp[i].i]})
-		}
+		ps[i].Key = kp[i].key
+		ps[i].Key = pathSlice[kp[i].i]
 	}
 
-	if i := len(kp); i > len(pathSlice) {
-		ps = append(ps, Param{Key: kp[i-1].key, Value: ""})
+	if i := len(kp) - 1; i >= len(pathSlice) {
+		ps[i].Key = kp[i].key
+		ps[i].Value = ""
 	} else {
 		if iswildChild {
-			ps = append(ps, Param{Key: kp[i-1].key, Value: strings.Join(pathSlice[i-1:], "/")})
+			ps[i].Key = kp[i].key
+			ps[i].Key = strings.Join(pathSlice[i:], "/")
 		} else {
-			ps = append(ps, Param{Key: kp[i-1].key, Value: pathSlice[kp[i-1].i]})
+			ps[i].Key = kp[i].key
+			ps[i].Key = pathSlice[kp[i].i]
 		}
 	}
 
@@ -75,6 +79,5 @@ func makeSegments(path string, max int) (segaments []string) {
 	if len(segaments) <= max {
 		return segaments
 	}
-	segaments[max-1] = strings.Join(segaments[max-1:], "/")
 	return segaments[:max]
 }

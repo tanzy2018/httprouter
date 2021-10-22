@@ -6,6 +6,7 @@ import (
 	filePath "path"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type methodType int
@@ -131,6 +132,30 @@ func (ps Params) ByName(name string) string {
 	return ""
 }
 
+type paramsPool struct {
+	pools []sync.Pool
+}
+
+func (pp *paramsPool) update(count int) {
+	if len(pp.pools) < count {
+		pp.pools = append(pp.pools, sync.Pool{})
+	}
+	pp.update(count - 1)
+}
+
+func (pp *paramsPool) put(ps Params, index int) {
+	pp.pools[index].Put(&ps)
+}
+
+func (pp *paramsPool) get(index int) Params {
+	ps := pp.pools[index].Get()
+	if ps == nil {
+		return nil
+	}
+	return *(ps.(*Params))
+}
+
+var paramsPools = new(paramsPool)
 var MatchedRoutePathParam = "$matchedRoutePath"
 
 func (ps Params) MatchedRoutePath() string {
@@ -249,6 +274,7 @@ func (r *Router) handleFileServe(method methodType, path string, handle Handle) 
 		isWildChild: true,
 		keyPair:     []keyPair{{i: len(segaments) - 1, key: "filepath"}},
 	}
+	paramsPools.update(1)
 	r.fileServes = append(r.fileServes, fnode)
 	if len(r.fileServes) > 1 {
 		sort.Slice(r.fileServes, func(i, j int) bool {
@@ -288,7 +314,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		_path := strings.ToLower(path)
 		for _, root := range r.fileServes {
 			if root.path == _path[:len(root.path)] {
-				root.handle(w, req, resolveParamsFromPath(path, root.keyPair, root.isWildChild))
+				ps := resolveParamsFromPath(path, root.keyPair, root.isWildChild)
+				root.handle(w, req, ps)
+				paramsPools.put(ps, 0)
 				return
 			}
 		}
@@ -298,6 +326,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		if handle, ps := root.resolvePath(path, pathsMap.getWildsBitByMethodType(mt)); handle != nil {
 			if ps != nil {
 				handle(w, req, ps)
+				paramsPools.put(ps, len(ps)-1)
 			} else {
 				handle(w, req, nil)
 			}
