@@ -25,6 +25,9 @@ func initPlaceHolder() {
 func resolveKeyPairFromPattern(pattern string) (kp []keyPair) {
 	patternSlice := strings.Split(pattern, "/")
 	for i := 0; i < len(patternSlice); i++ {
+		if len(patternSlice[i]) == 0 {
+			continue
+		}
 		if patternSlice[i][0] == ':' || patternSlice[i][0] == '*' {
 			kp = append(kp, keyPair{i, patternSlice[i][1:]})
 		}
@@ -38,24 +41,25 @@ func resolveParamsFromPath(path string, kp []keyPair, iswildChild bool) Params {
 		return nil
 	}
 	ps := paramsPools.get(len(kp) - 1)
+
 	if ps == nil {
 		ps = make(Params, len(kp))
 	}
 	for i := 0; i < len(kp)-1; i++ {
 		ps[i].Key = kp[i].key
-		ps[i].Key = pathSlice[kp[i].i]
-	}
+		ps[i].Value = pathSlice[kp[i].i]
 
+	}
 	if i := len(kp) - 1; i >= len(pathSlice) {
 		ps[i].Key = kp[i].key
 		ps[i].Value = ""
 	} else {
 		if iswildChild {
 			ps[i].Key = kp[i].key
-			ps[i].Key = strings.Join(pathSlice[i:], "/")
+			ps[i].Value = strings.Join(pathSlice[kp[i].i:], "/")
 		} else {
 			ps[i].Key = kp[i].key
-			ps[i].Key = pathSlice[kp[i].i]
+			ps[i].Value = pathSlice[kp[i].i]
 		}
 	}
 
@@ -67,6 +71,9 @@ func unifyPattern(path string) string {
 	path = strings.ToLower(path)
 	pathSlice := strings.Split(path, "/")
 	for i := 0; i < len(pathSlice); i++ {
+		if len(pathSlice[i]) == 0 {
+			continue
+		}
 		if pathSlice[i][0] == ':' {
 			pathSlice[i] = placeHolder
 		}
@@ -76,8 +83,17 @@ func unifyPattern(path string) string {
 
 func makeSegments(path string, max int) (segaments []string) {
 	segaments = strings.Split(strings.ToLower(path), "/")
+	if len(segaments) > 0 && len(segaments[0]) == 0 {
+		segaments = segaments[1:]
+	}
+
+	if len(segaments) > 0 && len(segaments[len(segaments)-1]) == 0 {
+		segaments = segaments[:len(segaments)-1]
+	}
+
 	if len(segaments) <= max {
 		return segaments
 	}
+	segaments[max-1] = strings.Join(segaments[max-1:], "/")
 	return segaments[:max]
 }

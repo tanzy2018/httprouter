@@ -40,7 +40,7 @@ func assertMethod(method string) {
 			return
 		}
 	}
-	panic("un resolved method type: " + method)
+	panic("unresolved method type: " + method)
 }
 
 type pathsBitsMap struct {
@@ -137,10 +137,13 @@ type paramsPool struct {
 }
 
 func (pp *paramsPool) update(count int) {
+	if len(pp.pools) >= count {
+		return
+	}
 	if len(pp.pools) < count {
 		pp.pools = append(pp.pools, sync.Pool{})
 	}
-	pp.update(count - 1)
+	pp.update(count)
 }
 
 func (pp *paramsPool) put(ps Params, index int) {
